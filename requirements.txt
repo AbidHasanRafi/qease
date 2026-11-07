@@ -1,0 +1,11 @@
+torch>=2.1
+transformers>=4.45
+numpy
+pandas
+matplotlib
+pillow
+tqdm
+datasets
+huggingface_hub
+pyarrow
+packaging
