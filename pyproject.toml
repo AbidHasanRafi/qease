@@ -1,0 +1,46 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "qease"
+version = "0.1.0"
+description = "Q-EASE: calibrated evidence sufficiency for efficient vision-language models"
+readme = "README.md"
+requires-python = ">=3.10"
+dependencies = [
+    "torch>=2.1",
+    "transformers>=4.45",
+    "numpy",
+    "pandas",
+    "matplotlib",
+    "pillow",
+    "tqdm",
+    "datasets",
+    "huggingface_hub",
+    "pyarrow",
+    "packaging",
+]
+
+[project.optional-dependencies]
+dev = ["pytest", "ruff"]
+
+[project.scripts]
+qease = "qease.cli:main"
+qease-extra = "qease.extra.__main__:main"
+
+[tool.setuptools.packages.find]
+include = ["qease*"]
+
+[tool.ruff]
+line-length = 160
+target-version = "py310"
+
+[tool.ruff.lint]
+select = ["F"]
+ignore = ["F841"]            # a few diagnostic variables are kept on purpose
+
+[tool.ruff.lint.per-file-ignores]
+# closures that read a local which is `del`-ed at the end of the enclosing function (false positives)
+"qease/selector.py" = ["F821"]
+"qease/extra/trained_baselines.py" = ["F821"]
