@@ -1,0 +1,20 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+build/
+dist/
+.venv/
+.pytest_cache/
+.ruff_cache/
+
+# run outputs (data pool, probe shards, checkpoints, results)
+qease_out/
+qease_results_*.zip
+qease_extra_results.zip
+
+# editors / OS
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
