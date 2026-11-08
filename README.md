@@ -19,8 +19,7 @@ on **decoded**, ground-truth-aware answers (official VQA accuracy / ANLS / exact
 
 > **Status.** This repository was assembled from the validated Q-EASE pipeline plus the new cascade code. It has been syntax-checked and
 > linted, but **the new parts have not been executed yet** (all experiments run on Kaggle, 2 x T4). Expect to fix first-run bugs; finished
-> stages are cached, so re-running resumes. See [Known limitations](#known-limitations).
-
+> stages are cached, so re-running resumes.
 ## Run it
 
 ```bash
