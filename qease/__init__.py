@@ -1,3 +1,5 @@
-"""Q-EASE: calibrated evidence sufficiency for efficient vision-language models."""
+"""Q-EASE pipeline package.
 
-__version__ = "0.1.0"
+The code lives in `qease/parts/*.py`: ordered, numbered parts of ONE program that `main.py` executes in a single shared namespace
+(they are not independent importable modules - they share globals such as CFG, RUNNERS, SELECTORS on purpose, see README.md).
+"""

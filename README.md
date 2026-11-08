@@ -1,177 +1,124 @@
-<div align="center">
+# Q-EASE: escalate or abstain
 
-# Q-EASE
+**Self-aware visual-token pruning for lightweight vision-language models, with a certified bound on the answers it loses.**
 
-### Calibrated Evidence Sufficiency for Efficient Vision-Language Models
+A pruned VLM is run as a *cascade* over growing visual-token budgets. After every stage two small heads, fed with the pruned model's own
+first-token statistics and the selector's set-risk output, estimate
 
-*Question-conditioned visual-token pruning with a conformal bound on how often pruning changes the model's answer.*
+* **harm**: P(full model correct **and** this stage wrong), so *escalate* to the next budget when it is too high;
+* **futility**: P(full model wrong), so *abstain* when more tokens would not help anyway.
 
-![Python 3.10+](https://img.shields.io/badge/python-3.10%2B-3776AB?logo=python&logoColor=white)
-![PyTorch](https://img.shields.io/badge/PyTorch-2.x-EE4C2C?logo=pytorch&logoColor=white)
-![Models](https://img.shields.io/badge/VLMs-Qwen2--VL%20%7C%20Qwen2.5--VL-6E56CF)
-![Hardware](https://img.shields.io/badge/runs%20on-2%C3%97%20T4-76B900?logo=nvidia&logoColor=white)
-
-<img src="assets/overview.png" alt="Overview of Q-EASE: inference with the amortized selector and the calibrated budget controller, offline probing and calibration, and the signals of one real example" width="100%">
-
-</div>
-
-<br>
-
-Visual tokens dominate the prefill cost of vision-language models (VLMs). Existing pruners rank tokens by attention or similarity, use one budget for every question, and say nothing about how often pruning changes the answer.
-**Q-EASE** treats pruning as *evidence sufficiency*: a kept subset of visual tokens is sufficient for a question if the pruned model's answer distribution stays close to the full model's.
-
-- **Offline**, a frozen VLM is probed with counterfactual group masks and the divergence of its answer distribution is recorded (**GCP**).
-- A **4M-parameter selector** amortizes these labels: a question-guided group scorer (**QGS**) ranks groups and a set-level risk head (**SRH**) predicts the risk of any kept set.
-- A **calibrated budget controller** (**CBC**) uses conformal risk control to pick, per question, the smallest budget whose predicted risk stays under a threshold, with a finite-sample bound on the answer-disagreement rate.
-
-Pruning happens before LLM prefill, positions are preserved, and no change to the VLM is needed.
-
-## Results at a glance
-
-Qwen2-VL-2B, seven VQA benchmarks, 1,795 held-out test questions. All numbers come from the paper's analysis scripts; intervals are 95% bootstrap intervals.
-
-| | Random | FastV | VisionZip | **Q-EASE** |
-|---|:---:|:---:|:---:|:---:|
-| Mean JS to the full model at 25% of the tokens (lower is better) | 0.161 | 0.119 | 0.097 | **0.073** |
-
-| Calibrated budget (answer-flip loss, target risk 0.10) | Kept tokens | Realized risk |
-|---|:---:|:---:|
-| Best calibrated fixed budget | 75.2% | within target |
-| **Q-EASE adaptive** | **62.4%** | 0.089 (Wilson 95% interval 0.076 to 0.103) |
-
-| Measured on a T4 (batch size 1) at 25% of the groups | Unpruned | Pruned |
-|---|:---:|:---:|
-| Prefill FLOPs | 883 G | 305 G (2.9x) |
-| Prefill time | 85.2 ms | 40.2 ms (2.1x) |
-| End-to-end latency (selector: 2.5 ms) | 240.7 ms | 198.2 ms (1.21x) |
-
-Decoded answers keep 85.7% of the unpruned accuracy at 25% of the tokens on held-out questions. The advantage over VisionZip is within noise, and on the official POPE, TextVQA, VQAv2 and A-OKVQA splits attention-based pruning is as accurate as Q-EASE. The conformal guarantee is marginal: it holds on average over test questions, not within every dataset. The paper reports these limits in full.
-
-## Repository layout
+The two thresholds (λ, μ) are calibrated with Learn-then-Test (fixed-sequence testing, exact binomial p-values), so that with probability
+at least 1 − δ over the calibration set
 
 ```
-qease/
-  config.py            default configuration (every key can be overridden)
-  state.py             run-time state shared by the modules (paths, models, selectors, thresholds)
-  pipeline.py          stage driver: pool -> load -> phase0 -> probe -> train -> eval -> crc -> gen -> latency -> analyze
-  cli.py               python -m qease ...
-  data.py              data pool: seven VQA datasets, image cache, image-level splits
-  vlm/                 frozen-VLM wrapper (hook-based runner, attention spy, FastV / VisionZip / SparseVLM ports)
-  selection.py         probe masks, trivial baselines, nested kept sets, compute-matched evaluation
-  probing.py           group-level counterfactual probing (offline labels)
-  phase0.py            headroom pilot with an oracle selector
-  selector.py          QGS + SRH and their training
-  evaluation.py        every selection method on the calibration and test splits
-  crc.py               conformal risk control: envelope loss, thresholds, fixed / adaptive / per-dataset policies
-  stats.py             bootstrap, paired tests, Holm correction, Wilson intervals
-  generation.py        downstream accuracy with physically pruned decoding
-  latency.py           latency, FLOPs and memory
-  analysis/            every table and figure of the paper (CSV, LaTeX and vector PDF)
-  extra/               extra experiments: trained baselines, question swap, accuracy, standard benchmarks, second model
-legacy/qease_kaggle.py single-file version of the pipeline that produced the paper's first run (kept for provenance)
-assets/                figures used in this README
-tests/                 unit tests of the answer metrics
+E[ 1{ full model correct  AND  (we abstain OR our final answer is wrong) } ]  <=  alpha        ("lost-correct rate")
 ```
 
-## Installation
+on **decoded**, ground-truth-aware answers (official VQA accuracy / ANLS / exact match), not on first-token agreement.
+
+> **Status.** This repository was assembled from the validated Q-EASE pipeline plus the new cascade code. It has been syntax-checked and
+> linted, but **the new parts have not been executed yet** (all experiments run on Kaggle, 2 x T4). Expect to fix first-run bugs; finished
+> stages are cached, so re-running resumes. See [Known limitations](#known-limitations).
+
+## Run it
 
 ```bash
-git clone https://github.com/abidhasanrafi/qease.git
-cd qease
-pip install -e .
+pip install -r requirements.txt
+python main.py
 ```
 
-Python 3.10 or newer, PyTorch 2.x and `transformers>=4.45`. A GPU with fp16 support is required for probing and evaluation; the reference setup is Kaggle with 2 x T4 (16 GB each). Internet access is needed to download the datasets and the VLM from the Hugging Face Hub (set `HF_TOKEN` for faster downloads).
+On Kaggle: GPU **T4 x 2**, Internet **on**, add the repo as a dataset or `git clone` it, then `!python main.py` (or `%run main.py`).
+`main.py` contains no configuration. The default is the full experiment, equal to running the one-cell script `qease_final.py`.
 
-## Quick start
+| Where | What |
+|---|---|
+| `qease/parts/01_config.py` | every setting (`CFG`), stage list, model presets |
+| env var `QEASE_OVERRIDES` | JSON overrides without editing files, e.g. `QEASE_OVERRIDES='{"PRESET":"3b"}' python main.py` |
+| notebook | define `CFG_OVERRIDES = dict(...)` before `%run main.py` |
 
-Run the full pipeline for Qwen2-VL-2B:
+Presets: `"2b"` (default, Qwen2-VL-2B), `"3b"` (Qwen2.5-VL-3B), `"7b"` (Qwen2.5-VL-7B in 4-bit, needs `bitsandbytes`, untested).
+
+**Smoke test first** (minutes, checks that every stage executes; with sizes this small the cascade will mostly fall back to "always use the
+full model", which is expected):
 
 ```bash
-python -m qease --stages pool load phase0 probe train eval crc analyze
+QEASE_OVERRIDES='{"RUN_TAG":"smoke","POOL_NAME":"pool_smoke","N_POOL":{"vqav2":150,"gqa":100,"textvqa":100,"docvqa":80,"aokvqa":80,"vsr":60,"clevr":60},"GQA_IMAGES":80,"VQAV2_SHARDS":1,"PROBE_TOTAL":200,"EPOCHS":3,"ABL_EPOCHS":2,"SHIFT_EPOCHS":2,"PHASE0_N":10,"TUNE_N":12,"CAL_N":60,"TEST_N":80,"DEC_N":{"head":40,"cal":50,"test":60},"DEC_BASE_N":20,"AUX_N":60,"LOGO_N":30,"ATTN_N":60,"ABL_TEST_N":30,"ABL_OMEGA_N":60,"ABL_OMEGA_TEST":20,"SHIFT_TEST_PER_DS":10,"HIRES_N":10,"LAT_N":3,"CASC_LAT_N":4,"CASC_RESPLITS":10,"BOOT_B":200,"CRC_RESAMPLES":5,"CAL_SIZES":[10,20],"CAL_SIZE_REPS":3}' python main.py
 ```
 
-or from Python (for example in a Kaggle notebook):
+## Layout
 
-```python
-from qease.pipeline import run
-
-run(stages=["pool", "load", "probe", "train", "eval", "crc", "analyze"])
+```
+main.py                    entry point: runs the parts in order, no configuration
+requirements.txt
+qease/parts/               the pipeline, split into ordered parts of ONE program (shared namespace, see below)
+  00_setup.py                imports, logging, HF token
+  01_config.py               CFG, presets, output folders, seeds, devices
+  02_data_pool.py            7 HF datasets -> local image/question pool, image-level splits
+  03_vlm_runner.py           VLMRunner: one model replica per GPU, physical token pruning, FastV/VisionZip/SparseVLM ports
+  04_models_and_selftests.py parallel helpers (one worker per GPU), model loading, self-tests of every baseline
+  05_masks_baselines_phase0.py probe masks, random/uniform/question-similarity baselines, phase-0 oracle headroom gate
+  06_extra_baselines.py      teacher-forced scoring, DivPrune / CDPruner-style / DART-style / PyramidDrop, greedy (MMR) set construction
+  07_probing.py              counterfactual probing -> (mask, JS-divergence) labels
+  08_selector.py             question-guided group scorer + set-level risk head, training
+  09_trainer_and_labels.py   general trainer (label / architecture / loss / mask ablations), gold-likelihood, answer-distillation, attention and single-group labels
+  10_eval.py                 first-token fidelity of every method on cal/test (+ greedy-beta tuning on validation images)
+  11_reporting_and_crc.py    statistics, plotting style, legacy JS-based conformal risk control, answer normalisation
+  12_aux_labels_ablations.py extra-label generation, label/architecture/loss/mask/window ablations
+  13_decoded_records.py      official answer metrics; decoded answers per budget (+ baselines) = the task-aligned evidence
+  14_cascade_core.py         harm + futility heads, cascade simulation, Learn-then-Test calibration, saved policy
+  15_shift_hires.py          leave-one-dataset-out selectors, high-resolution stage
+  16_latency.py              prefill latency / FLOPs, REAL wall-clock of the executed cascade
+  17_analysis_legacy.py      tables + figures for fidelity, calibration, difficulty, qualitative cases, compute-matched comparisons
+  18_analysis_cascade.py     tables + figures for the cascade, re-splits, conditional coverage, shift, ablations, hi-res, latency
+  19_done.py
 ```
 
-Every stage is idempotent and writes to disk, so after an interruption you re-run the same command and finished work is skipped.
+**Why parts and not importable modules.** The pipeline was designed as a no-`main()` notebook program: every stage checkpoints to disk and is
+idempotent, and a crash must leave all state alive. `main.py` therefore executes the parts one after another in a single shared namespace
+(the module `qease_pipeline`), exactly like consecutive pieces of one cell. Functions read and rebind shared globals on purpose (for example the ablation
+code temporarily re-points `PROBE_DIR`/`CKPT_DIR`). Tracebacks keep the part file name and line number. After a crash, in a notebook:
+`import sys; ns = sys.modules["qease_pipeline"]; ns.FAILS[-1]`.
 
-| Stage | What it does | Notes |
-|---|---|---|
-| `pool` | downloads and caches 11.5k image-question pairs from VQAv2, GQA, A-OKVQA, TextVQA, DocVQA, VSR, CLEVR | splits are made by image hash |
-| `load` | loads the VLM on every GPU, runs sanity checks and the self-tests of the FastV, VisionZip and SparseVLM ports | a baseline is only used if its self-test passes |
-| `phase0` | headroom pilot: oracle group-removal ranking against cheap baselines | 120 questions |
-| `probe` | counterfactual probing, 24 masks per image | about 83 min for 6,000 images on 2 x T4 |
-| `train` | trains the selector (full and no-question variants) | about 5 min |
-| `eval` | evaluates every method on the calibration and test splits | |
-| `crc` | calibrates the conformal thresholds | |
-| `gen` | downstream accuracy with physically pruned decoding | |
-| `latency` | measured latency, FLOPs and memory | |
-| `analyze` | writes every table and figure of the paper | |
+## Stages
 
-Override any configuration key from the command line (values are Python literals):
+Set `CFG["STAGES"]` to run a subset; each stage is skipped when its outputs already exist.
 
-```bash
-python -m qease --stages pool load probe train eval crc analyze \
-    --set MODEL_ID=Qwen/Qwen2.5-VL-3B-Instruct PROBE_TOTAL=3000 CAL_N=600 TEST_N=800 SPARSEVLM=False
-```
-
-The defaults and their comments are in [`qease/config.py`](qease/config.py).
+| Stage | What it does |
+|---|---|
+| `pool` | build the data pool from VQAv2, GQA, TextVQA, DocVQA, A-OKVQA, VSR, CLEVR (split by image: train 62 / val 8 / cal 15 / test 15 %) |
+| `load` | load one model replica per GPU; self-test FastV, VisionZip, SparseVLM, DivPrune, CDPruner-style, DART-style, PyramidDrop (a failing baseline is disabled) |
+| `phase0` | oracle headroom gate |
+| `probe` | counterfactual probing of the frozen VLM with group masks |
+| `train` | main selector + no-question selector |
+| `eval` | first-token fidelity of all methods on cal/test |
+| `crc` | legacy JS-based conformal thresholds |
+| `aux` | extra labels: gold-answer likelihood, full-model-answer likelihood, FastV attention, leave-one-group-out |
+| `ablate` | label / architecture / loss / mask / window ablations |
+| `dec` | decoded answers per budget for head-train, calibration and test questions (+ baselines on a test subset) |
+| `casc` | train the harm and futility heads, calibrate (λ, μ) with Learn-then-Test, save the policy |
+| `shift` | leave-one-dataset-out selectors |
+| `hires` | the same selectors and policy at 4x the token caps |
+| `latency` | prefill latency / FLOPs, and the real executed cascade |
+| `analyze` | every table, figure and tidy CSV |
 
 ## Outputs
 
-Everything is written under `<base-dir>/<model>/` (default `/kaggle/working/qease` on Kaggle, `./qease_out` elsewhere; change it with `--base-dir`):
+`qease_out/<RUN_TAG>/results/` (on Kaggle: `/kaggle/working/qease/<RUN_TAG>/results/`, plus a zip next to it):
 
 ```
-pool/                      shared data pool (images and metadata)
-<model>/probe/             probe shards (masks and labels)
-<model>/ckpt/              trained selectors
-<model>/eval/              per-question evaluation records
-<model>/results/tables/    CSV (+ LaTeX) tables, including lambdas.json with the calibrated thresholds
-<model>/results/figures/   vector PDF + PNG figures
-<model>/results/figdata/   the exact tidy data behind every figure
+tables/*.csv|tex     figures/*.pdf|png     figdata/*.csv (exact data behind every figure)     MANIFEST.csv     README_results.md     run_config.json
 ```
 
-## Extra experiments
+Key tables: `casc_main` (cascade vs full / fixed / static-adaptive / uncalibrated / oracle), `casc_resplits` (distribution over random re-splits,
+Learn-then-Test vs expectation-only CRC), `casc_conditional` (per dataset / difficulty / length + Mondrian over difficulty), `casc_shift`,
+`decoded_baselines`, `ablations`, `head_quality`, `casc_latency`.
 
-`qease.extra` closes the gaps a reviewer would point at. It re-uses the first run's selectors, thresholds and evaluation records.
+## What the experiment tests
 
-```bash
-python -m qease.extra --set RUN_MODEL2=False BENCH_N_PER_DS=80 STD_N=80
-```
-
-| Block | Question it answers |
-|---|---|
-| Trained baselines | is the gain due to the counterfactual labels or to training in general? (attention-distilled, MLP and shuffled-label selectors) |
-| Question swap | does the selected set depend on the question? |
-| Downstream accuracy | official VQA accuracy, ANLS and exact match on held-out questions |
-| Standard benchmarks | the same on official POPE, TextVQA, VQAv2 and A-OKVQA splits that are not in the training pool |
-| Second model | probing, training and calibration for Qwen2.5-VL-3B with a compact protocol |
-
-The options are in [`qease/extra/config.py`](qease/extra/config.py). The trained-baseline block needs the probe shards of the first run.
-
-## Adding your own pruning method
-
-Register a function that returns one importance score per visual token. It is then evaluated with the same pre-LLM pruning protocol, budgets and metrics as every other method.
-
-```python
-from qease import state
-
-# fn(runner, ctx) -> 1-D tensor of per-visual-token importance (higher = keep)
-state.EXTERNAL_SCORERS["my_method"] = lambda r, ctx: my_scores(r.model, ctx["inputs"])
-```
-
-## Notes on the code
-
-- This package is a mechanical split of the single-file pipeline in `legacy/qease_kaggle.py`: function and class bodies are unchanged, and the notebook globals became attributes of `qease.state`. The package has been checked statically (syntax, undefined names, import graph) and has not yet been re-run end to end; the single-file version is the one that produced the paper's numbers.
-- The ports of FastV, VisionZip and SparseVLM v1.0 reproduce the full model to 1e-8 JS when pruning is disabled, but were not compared with the original implementations on their native models.
-- Two bugs of the single-file version, found in the Qwen2.5-VL-3B analysis, are fixed here: a `%` formatting error when writing the results README, and a pandas attribute lookup (`d.sem` instead of `d["sem"]`) in the risk-head figure.
-
-## Acknowledgements
-
-Q-EASE builds on [Qwen2-VL](https://github.com/QwenLM/Qwen2-VL) and Qwen2.5-VL, and compares against ports of [FastV](https://github.com/pkunlp-icler/FastV), [VisionZip](https://github.com/dvlab-research/VisionZip) and [SparseVLM](https://github.com/Gumpest/SparseVLMs). Datasets are loaded from the Hugging Face Hub; please respect the licenses of each dataset and model.
+* **Decoded, task-aligned risk** (P(correct to wrong), abstention counted as a loss) instead of first-token agreement.
+* **High-probability certificate** (Learn-then-Test) and its per-split behaviour over 200 random re-splits, against the expectation-only CRC rule.
+* **Conditional coverage** beyond dataset: difficulty and question-length bins, and Mondrian calibration over difficulty.
+* **Shift:** calibrating on other datasets and testing on a held-out one (heads, thresholds and selector), few-shot recalibration, high resolution.
+* **Labels:** does counterfactual supervision beat attention-derived, single-group, gold-likelihood and shuffled labels with the same architecture?
+* **Baselines** at matched budgets, decoded with the same decoder: FastV, VisionZip, SparseVLM (first-token only), DivPrune, CDPruner-style, DART-style, PyramidDrop.

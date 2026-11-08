@@ -1,11 +1,18 @@
 torch>=2.1
+torchvision
 transformers>=4.45
+accelerate
 numpy
 pandas
+scipy
+scikit-learn
 matplotlib
 pillow
 tqdm
-datasets
+datasets>=2.19
 huggingface_hub
 pyarrow
 packaging
+jinja2
+# optional: only for CFG["QUANT"]="4bit" / "8bit" (the 7B preset)
+# bitsandbytes
